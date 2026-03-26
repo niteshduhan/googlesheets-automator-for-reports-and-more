@@ -1,0 +1,224 @@
+function onEdit(e) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = e.range.getSheet();
+  const sheetName = sheet.getName();
+  const sheetsToWatch = ['A', 'B', 'C'];
+  const masterSheetName = 'MASTER DATA';
+  const phoneCol = 3; // Contact No. is column C (3)
+  
+  if (sheetsToWatch.includes(sheetName)) {
+    const editedRow = e.range.getRow();
+    const phoneValue = sheet.getRange(editedRow, phoneCol).getValue();
+    
+    if (phoneValue) {
+      // Get all data for this row, matching MASTER DATA's column count
+      const masterSheet = ss.getSheetByName(masterSheetName);
+      const masterColCount = masterSheet.getLastColumn();
+      const rowValues = sheet.getRange(editedRow, 1, 1, masterColCount).getValues()[0];
+      const masterPhones = masterSheet.getRange(2, phoneCol, Math.max(0, masterSheet.getLastRow() - 1), 1).getValues().flat();
+      let matchRow = -1;
+      // Find if phone number already exists in master
+      for (let i = 0; i < masterPhones.length; i++) {
+        if (masterPhones[i] === phoneValue) {
+          matchRow = i + 2; // +2: 1 for 0-index, 1 for headers
+          break;
+        }
+      }
+      // If found, update the entire row; else, append
+      if (matchRow !== -1) {
+        masterSheet.getRange(matchRow, 1, 1, masterColCount).setValues([rowValues]);
+      } else {
+        masterSheet.appendRow(rowValues);
+      }
+    }
+    
+    // Duplicate check and red highlight in entry sheet
+    if (phoneValue) {
+      sheet.getRange(2, phoneCol, sheet.getLastRow() - 1, 1).setBackground(null);
+      const phoneVals = sheet.getRange(2, phoneCol, sheet.getLastRow() - 1, 1).getValues().flat();
+      const duplicateRows = [];
+      phoneVals.forEach((val, idx) => {
+        if (val === phoneValue) duplicateRows.push(idx + 2);
+      });
+      if (duplicateRows.length > 1) {
+        duplicateRows.forEach(rowNum => {
+          sheet.getRange(rowNum, phoneCol).setBackground('red');
+        });
+        SpreadsheetApp.getUi().alert('Duplicate phone number found: ' + phoneValue);
+      }
+    }
+  }
+
+  // Refresh pivot table as before
+  const pivotSheet = ss.getSheetByName('Pivot Table');
+  if (pivotSheet) {
+    const pivotCell = pivotSheet.getRange('A1');
+    const currentValue = pivotCell.getValue();
+    pivotCell.setValue('');
+    SpreadsheetApp.flush();
+    pivotCell.setValue(currentValue);
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+function mainHRReport_TwoWeekComparison() {
+
+  const hrNames = ["Preetika", "Anadi"];
+  const recipientEmails = [
+    "duhanwork01@gmail.com",
+  ];
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  /* ===== DATE CALCULATION (MON–SUN) ===== */
+  const today = new Date();
+  const day = today.getDay(); // Sunday = 0
+
+  const lastSunday = new Date(today);
+  lastSunday.setDate(today.getDate() - day);
+  lastSunday.setHours(23,59,59,999);
+
+  const lastMonday = new Date(lastSunday);
+  lastMonday.setDate(lastSunday.getDate() - 6);
+  lastMonday.setHours(0,0,0,0);
+
+  const prevSunday = new Date(lastMonday);
+  prevSunday.setDate(lastMonday.getDate() - 1);
+  prevSunday.setHours(23,59,59,999);
+
+  const prevMonday = new Date(prevSunday);
+  prevMonday.setDate(prevSunday.getDate() - 6);
+  prevMonday.setHours(0,0,0,0);
+
+  const formatDate = d =>
+    Utilities.formatDate(d, Session.getScriptTimeZone(), "dd MMM yyyy");
+
+  /* ===== FETCH STATS ===== */
+  function getStats(sheetName, start, end) {
+
+    const sheet = ss.getSheetByName(sheetName);
+    if (!sheet) return null;
+
+    const data = sheet.getDataRange().getValues();
+
+    const COL = {
+      date: 0,
+      position: 4,
+      contacted: 14,
+      scheduled: 15,
+      done: 16
+    };
+
+    let totalCalls = 0;
+    let contactedYes = 0;
+    let scheduled = 0;
+    let done = 0;
+    let jobMap = {};
+
+    for (let i = 1; i < data.length; i++) {
+
+      const row = data[i];
+      const d = new Date(row[COL.date]);
+      if (isNaN(d)) continue;
+      if (d < start || d > end) continue;
+
+      const contacted = (row[COL.contacted] || "").toString().trim();
+      const sched = (row[COL.scheduled] || "").toString().trim();
+      const doneVal = (row[COL.done] || "").toString().trim();
+      const job = (row[COL.position] || "").toString().trim();
+
+      if (contacted === "Yes" || contacted === "No") totalCalls++;
+      if (contacted === "Yes") contactedYes++;
+      if (sched === "Scheduled") scheduled++;
+      if (doneVal === "Yes") done++;
+
+      if (job) jobMap[job] = (jobMap[job] || 0) + 1;
+    }
+
+    // Always subtract 1 (safe)
+    totalCalls = Math.max(0, totalCalls - 1);
+    contactedYes = Math.max(0, contactedYes - 1);
+
+    return {
+      totalCalls,
+      contactedYes,
+      callsPerDay: (totalCalls / 6).toFixed(1),
+      scheduled,
+      done,
+      schedulingRatio: contactedYes > 0
+        ? ((scheduled / contactedYes) * 100).toFixed(1) + "%"
+        : "0%",
+      topJobs: Object.entries(jobMap)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 2)
+        .map(j => j[0])
+        .join(", ") || "-"
+    };
+  }
+
+  let stats = {};
+  hrNames.forEach(hr => {
+    stats[hr] = {
+      last: getStats(hr, lastMonday, lastSunday),
+      prev: getStats(hr, prevMonday, prevSunday)
+    };
+  });
+
+  /* ===== BUILD EMAIL ===== */
+  let htmlBody = `
+  <div style="font-family:Arial; padding:20px">
+    <h2 style="text-align:center">Weekly HR Report</h2>
+    <p style="text-align:center; color:#555">
+      Last Week: ${formatDate(lastMonday)} – ${formatDate(lastSunday)}<br>
+      Previous Week: ${formatDate(prevMonday)} – ${formatDate(prevSunday)}
+    </p>
+
+    <table style="width:100%; border-collapse:collapse; font-size:14px">
+      <tr style="background:#1a2a6c; color:white">
+        <th style="border:1px solid #ccc; padding:8px">Metric</th>
+        <th style="border:1px solid #ccc">Preetika </th>
+        <th style="border:1px solid #ccc">Anadi </th>
+        <th style="border:1px solid #ccc">Preetika (Prev)</th>
+        <th style="border:1px solid #ccc">Anadi (Prev)</th>
+      </tr>`;
+
+  const rows = [
+    ["Total Calls", "totalCalls"],
+    ["Contacted", "contactedYes"],
+    ["Calls / Day", "callsPerDay"],
+    ["Scheduled", "scheduled"],
+    ["Interview Done", "done"],
+    ["Scheduling Ratio", "schedulingRatio"],
+    ["Top 2 Jobs", "topJobs"]
+  ];
+
+  rows.forEach(r => {
+    htmlBody += `
+      <tr>
+        <td style="border:1px solid #ccc; padding:8px"><b>${r[0]}</b></td>
+        <td style="border:1px solid #ccc">${stats.Preetika.last[r[1]]}</td>
+        <td style="border:1px solid #ccc">${stats.Anadi.last[r[1]]}</td>
+        <td style="border:1px solid #ccc">${stats.Preetika.prev[r[1]]}</td>
+        <td style="border:1px solid #ccc">${stats.Anadi.prev[r[1]]}</td>
+      </tr>`;
+  });
+
+  htmlBody += `</table></div>`;
+
+  MailApp.sendEmail({
+    to: recipientEmails.join(","),
+    subject: "HR Weekly Report – 2 Week Comparison",
+    htmlBody: htmlBody
+  });
+}
