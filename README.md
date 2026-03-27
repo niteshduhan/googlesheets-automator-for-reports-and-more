@@ -77,7 +77,7 @@ Last Week : Most recent completed Monday → Sunday
 Prev Week : The Monday → Sunday before that
 ```
 
-### Column Mapping (HR sheets)
+### Column Mapping (HR sheets) 
 
 | Column Index | Field |
 |---|---|
